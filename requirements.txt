@@ -1,2 +1,12 @@
 paho-mqtt==1.6.1
 python-dotenv==1.0.0
+
+# QR decoding (no GUI — headless-safe for Pi OS)
+opencv-python-headless>=4.8.0
+
+# Pi Camera Module V2 driver
+# Install via apt on the Pi (preferred — includes libcamera native bindings):
+#   sudo apt install -y python3-picamera2
+# Or via pip (may need extra system libs):
+#   pip install picamera2
+# picamera2

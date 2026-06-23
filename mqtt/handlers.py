@@ -1,241 +1,156 @@
 """
-Command Dispatcher and Handler Stubs
+Gate Command Handler — NammaPark RPi (QR Gate Architecture)
 
-Routes incoming MQTT command messages to the appropriate handler
-based on the "action" field in the JSON payload.
+Subscribes to the gate_command topic and controls the physical servo gate
+based on backend instructions.
 
-The backend publishes commands to: parking/plot/{plot_id}/command
+Topics:
+  Subscribe: parking/plot/{plot_id}/gate_command
+    Payload: { "action": "open" } or { "action": "close" }
 
-Expected command payloads:
-    Reserve:  { "action": "reserve",  "booking_id": <int>, "slot_type": "2W"|"4W" }
-    Unlock:   { "action": "unlock",   "booking_id": <int>, "slot_id": <int> }
-    Lock:     { "action": "lock",     "slot_id": <int> }
+  Subscribe: parking/plot/{plot_id}/entry_verified
+    Payload: { "booking_id", "vehicle_id", "vehicle_number", "timestamp", "status" }
+    (logged only; gate is driven by gate_command)
 
-After processing a command, the RPi publishes a status response to:
-    parking/plot/{plot_id}/status
-
-Status response payloads:
-    Reserved: { "action": "reserved", "booking_id": <int>, "slot_id": <int> }
-    Freed:    { "action": "freed",    "booking_id": <int>, "slot_id": <int> }
+  Subscribe: parking/plot/{plot_id}/alerts
+    Payload: { "type", "message", "timestamp" }
+    (logged to console; future: trigger buzzer/display)
 """
 
 import json
 import logging
-from typing import Callable, Optional
+from typing import Callable
 
-from mqtt.topics import Topics
+from hardware.gate_controller import GateController
 
 logger = logging.getLogger(__name__)
 
 
-class CommandDispatcher:
+class GateCommandHandler:
     """
-    Dispatches incoming MQTT command messages to registered action handlers.
+    Routes incoming MQTT messages to the gate controller.
 
-    Each handler is a function that processes a specific action type
-    (reserve, unlock, lock) and optionally returns a status response
-    to be published back to the backend.
+    Registered as the message handler on MQTTClient.  Handles three
+    inbound topics:
+      - gate_command   → opens or closes the servo gate
+      - entry_verified → logs the backend's verification result
+      - alerts         → logs security/device alerts
 
     Usage:
-        dispatcher = CommandDispatcher(plot_id=1, publish_fn=mqtt_client.publish)
-        mqtt_client.set_message_handler(dispatcher.dispatch)
+        handler = GateCommandHandler(gate_controller)
+        mqtt_client.set_message_handler(handler.handle)
     """
 
-    def __init__(self, plot_id: int, publish_fn: Callable[[str, str, int], bool]):
+    def __init__(self, gate_controller: GateController):
         """
-        Initialize the command dispatcher.
+        Initialise the gate command handler.
 
         Args:
-            plot_id: The plot ID this device manages
-            publish_fn: Function to publish MQTT messages — signature: (topic, payload, qos) -> bool
+            gate_controller: Configured and set-up GateController instance
         """
-        self.plot_id = plot_id
-        self._publish_fn = publish_fn
+        self._gate = gate_controller
+        logger.info("GateCommandHandler initialised")
 
-        # Action → handler mapping
-        self._handlers: dict[str, Callable] = {
-            "reserve": self._handle_reserve,
-            "unlock": self._handle_unlock,
-            "lock": self._handle_lock,
-        }
-
-        # Slot allocation tracking (simple in-memory state for now)
-        # Maps booking_id → assigned slot_id
-        self._slot_assignments: dict[int, int] = {}
-        self._next_slot_id: int = 1  # Auto-incrementing slot ID
-
-        logger.info("Command dispatcher initialized for plot %d", plot_id)
-
-    def dispatch(self, topic: str, payload: str) -> None:
+    def handle(self, topic: str, payload: str) -> None:
         """
-        Route an incoming MQTT message to the appropriate handler.
+        Route an incoming MQTT message to the correct sub-handler.
 
         This is the callback registered with MQTTClient.set_message_handler().
 
         Args:
-            topic: MQTT topic the message arrived on
-            payload: Raw JSON string payload
+            topic:   Full MQTT topic string
+            payload: Raw JSON payload string
         """
-        # Parse JSON
+        # Parse JSON defensively
         try:
             data = json.loads(payload)
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON in command payload: %s", payload[:200])
+        except (json.JSONDecodeError, ValueError):
+            logger.error("Invalid JSON on topic %s: %s", topic, payload[:200])
             return
 
-        # Extract action
-        action = data.get("action")
-        if not action:
-            logger.error("Missing 'action' field in command: %s", data)
+        if not isinstance(data, dict):
+            logger.error("Expected JSON object on topic %s, got %s — ignoring", topic, type(data).__name__)
             return
 
-        # Find and execute handler
-        handler = self._handlers.get(action)
-        if handler:
-            logger.info("Dispatching action '%s' — payload: %s", action, data)
-            try:
-                handler(data)
-            except Exception as e:
-                logger.error("Error handling action '%s': %s", action, e, exc_info=True)
+        # Route by topic suffix
+        suffix = topic.split("/")[-1]   # e.g. "gate_command", "entry_verified"
+
+        if suffix == "gate_command":
+            self._handle_gate_command(data)
+        elif suffix == "entry_verified":
+            self._handle_entry_verified(data)
+        elif suffix == "alerts":
+            self._handle_alert(data)
         else:
-            logger.warning("Unknown action '%s' received. Ignoring.", action)
+            logger.debug("No handler for topic suffix '%s' — ignoring", suffix)
 
-    def _publish_status(self, payload: dict) -> bool:
+    # ------------------------------------------------------------------
+    # Sub-handlers
+    # ------------------------------------------------------------------
+
+    def _handle_gate_command(self, data: dict) -> None:
         """
-        Publish a status response to the backend.
-
-        Args:
-            payload: Status payload dict (will be JSON-serialized)
-
-        Returns:
-            True if published successfully
-        """
-        topic = Topics.status(self.plot_id)
-        payload_str = json.dumps(payload)
-        logger.info("Publishing status response → %s: %s", topic, payload_str)
-        return self._publish_fn(topic, payload_str, 1)
-
-    # =========================================================================
-    # Action Handlers (stubs — hardware control will be added later)
-    # =========================================================================
-
-    def _handle_reserve(self, data: dict) -> None:
-        """
-        Handle a 'reserve' command from the backend.
+        Process a gate_command message from the backend.
 
         Expected payload:
-            { "action": "reserve", "booking_id": <int>, "slot_type": "2W"|"4W" }
+            { "action": "open" }   or
+            { "action": "close" }
 
-        This should:
-        1. Find a free physical slot of the requested type
-        2. Mark it as reserved
-        3. Respond with the assigned slot_id
-
-        Currently: assigns a simulated slot_id and publishes confirmation.
-        TODO: Integrate with actual hardware slot sensors/actuators.
+        The backend sends "open" after successfully validating a QR scan
+        (check-in or check-out).  The Pi opens the gate; the GateController
+        auto-closes after SERVO_OPEN_DURATION seconds.
         """
-        booking_id = data.get("booking_id")
-        slot_type = data.get("slot_type")
+        action = data.get("action", "").lower()
 
-        if booking_id is None or slot_type is None:
-            logger.error("Reserve command missing required fields: booking_id=%s, slot_type=%s", booking_id, slot_type)
-            return
+        if action == "open":
+            logger.info("GATE COMMAND: open — raising barrier")
+            try:
+                self._gate.open()
+            except Exception as exc:
+                logger.error("Error opening gate: %s", exc, exc_info=True)
 
-        # --- STUB: Assign a simulated slot ID ---
-        # In production, this will query physical sensors to find a free slot
-        assigned_slot_id = self._next_slot_id
-        self._next_slot_id += 1
-        self._slot_assignments[booking_id] = assigned_slot_id
+        elif action == "close":
+            logger.info("GATE COMMAND: close — lowering barrier")
+            try:
+                self._gate.close()
+            except Exception as exc:
+                logger.error("Error closing gate: %s", exc, exc_info=True)
 
-        logger.info(
-            "RESERVE — booking_id=%d, slot_type=%s → assigned slot_id=%d",
-            booking_id, slot_type, assigned_slot_id,
-        )
-        # TODO: Activate hardware indicator (LED/display) for the assigned slot
+        else:
+            logger.warning("GATE COMMAND: unknown action '%s' — ignoring", action)
 
-        # Publish confirmation back to backend
-        self._publish_status({
-            "action": "reserved",
-            "booking_id": booking_id,
-            "slot_id": assigned_slot_id,
-        })
-
-    def _handle_unlock(self, data: dict) -> None:
+    def _handle_entry_verified(self, data: dict) -> None:
         """
-        Handle an 'unlock' command from the backend.
+        Log the backend's entry verification result.
 
-        Expected payload:
-            { "action": "unlock", "booking_id": <int>, "slot_id": <int> }
+        Payload: { "booking_id", "vehicle_id", "vehicle_number", "timestamp", "status" }
 
-        This should:
-        1. Unlock the physical barrier/gate for the specified slot
-        2. Allow the user's vehicle to enter
-
-        Currently: logs the action.
-        TODO: Activate servo/gate mechanism for the specified slot.
+        The gate itself is controlled exclusively via gate_command.  This
+        message is informational (useful for local logging / future display).
         """
-        booking_id = data.get("booking_id")
-        slot_id = data.get("slot_id")
+        booking_id     = data.get("booking_id")
+        vehicle_number = data.get("vehicle_number", "N/A")
+        status         = data.get("status", "unknown")
+        timestamp      = data.get("timestamp", "")
 
-        if booking_id is None or slot_id is None:
-            logger.error("Unlock command missing required fields: booking_id=%s, slot_id=%s", booking_id, slot_id)
-            return
+        if status == "verified":
+            logger.info(
+                "ENTRY VERIFIED ✓ — booking_id=%s, vehicle=%s, at=%s",
+                booking_id, vehicle_number, timestamp,
+            )
+        else:
+            logger.warning(
+                "ENTRY REJECTED ✗ — booking_id=%s, vehicle=%s, status=%s",
+                booking_id, vehicle_number, status,
+            )
 
-        logger.info(
-            "UNLOCK — booking_id=%d, slot_id=%d → barrier opened",
-            booking_id, slot_id,
-        )
-        # TODO: Trigger servo motor to open gate/barrier for this slot
-
-    def _handle_lock(self, data: dict) -> None:
+    def _handle_alert(self, data: dict) -> None:
         """
-        Handle a 'lock' command from the backend.
+        Log a security or device alert from the backend.
 
-        Expected payload:
-            { "action": "lock", "slot_id": <int> }
-
-        This should:
-        1. Lock the physical barrier/gate for the specified slot
-        2. Free the slot for future bookings
-
-        Currently: logs the action and publishes freed response.
-        TODO: Activate servo/gate mechanism to lock the slot.
+        Payload: { "type", "message", "timestamp" }
         """
-        slot_id = data.get("slot_id")
-
-        if slot_id is None:
-            logger.error("Lock command missing required field: slot_id=%s", slot_id)
-            return
-
-        # Find the booking for this slot (if tracked)
-        booking_id = None
-        for bid, sid in self._slot_assignments.items():
-            if sid == slot_id:
-                booking_id = bid
-                break
-
-        logger.info(
-            "LOCK — slot_id=%d, booking_id=%s → barrier closed, slot freed",
-            slot_id, booking_id,
-        )
-        # TODO: Trigger servo motor to close gate/barrier for this slot
-
-        # Clean up tracking
-        if booking_id is not None:
-            self._slot_assignments.pop(booking_id, None)
-
-            # Publish freed status back to backend
-            self._publish_status({
-                "action": "freed",
-                "booking_id": booking_id,
-                "slot_id": slot_id,
-            })
-
-    def get_active_reservations(self) -> dict[int, int]:
-        """
-        Get currently active slot assignments.
-
-        Returns:
-            Dict mapping booking_id → slot_id
-        """
-        return dict(self._slot_assignments)
+        alert_type = data.get("type", "unknown")
+        message    = data.get("message", "")
+        timestamp  = data.get("timestamp", "")
+        logger.warning("ALERT [%s] @ %s — %s", alert_type, timestamp, message)

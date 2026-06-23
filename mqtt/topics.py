@@ -1,97 +1,104 @@
 """
-MQTT Topic Constants and Builders
+MQTT Topic Constants and Builders — NammaPark RPi (QR Gate Architecture)
 
-Centralized topic management for NammaPark RPi device.
-Matches the topic structure used by the IDP backend:
-  - parking/plot/{plot_id}/command   (backend → RPi)
-  - parking/plot/{plot_id}/status    (RPi → backend)
-  - parking/plot/{plot_id}/heartbeat (RPi → backend)
+Matches the Phase 2 QR Access topic structure from the Feature Development Roadmap:
 
-All topic strings are built through this module to prevent
-typos and ensure consistency with the backend.
+  Pi publishes:
+    parking/plot/{id}/entry_scan     — QR scanned at entry gate
+    parking/plot/{id}/heartbeat      — device health + timestamp
+
+  Pi subscribes:
+    parking/plot/{id}/gate_command   — backend commands gate open/close
+    parking/plot/{id}/alerts         — unauthorised access / device alerts (log only)
+
+  Backend publishes (Pi subscribes):
+    parking/plot/{id}/gate_command   — { "action": "open" | "close" }
+    parking/plot/{id}/entry_verified — entry confirmation (logged, not acted on directly)
 """
 
 
 class Topics:
     """
-    MQTT topic builder for NammaPark parking system.
+    MQTT topic builder for NammaPark parking system (QR Gate architecture).
 
     All topics follow the pattern: parking/plot/{plot_id}/{suffix}
-
-    Subscriptions (RPi listens):
-        - parking/plot/{plot_id}/command  — receive actions from backend
-
-    Publications (RPi sends):
-        - parking/plot/{plot_id}/status    — report action results
-        - parking/plot/{plot_id}/heartbeat — periodic health check
     """
 
-    # Topic base prefix
     PREFIX = "parking/plot"
 
-    # Topic suffixes
-    COMMAND = "command"
-    STATUS = "status"
-    HEARTBEAT = "heartbeat"
+    # Suffixes
+    ENTRY_SCAN     = "entry_scan"
+    GATE_COMMAND   = "gate_command"
+    HEARTBEAT      = "heartbeat"
+    ENTRY_VERIFIED = "entry_verified"
+    ALERTS         = "alerts"
+
+    # ---------------------------------------------------------------------------
+    # Pi publishes
+    # ---------------------------------------------------------------------------
 
     @staticmethod
-    def command(plot_id: int) -> str:
+    def entry_scan(plot_id: int) -> str:
         """
-        Build the command topic for a plot (backend → RPi).
+        Pi publishes here when a QR code is scanned at the gate.
 
-        The RPi subscribes to this topic to receive actions:
-        - reserve: Reserve a slot for a booking
-        - unlock: Unlock a slot when user arrives
-        - lock: Lock a slot (cancellation or checkout)
-
-        Args:
-            plot_id: The parking plot ID this device manages
-
-        Returns:
-            Topic string, e.g. "parking/plot/1/command"
+        Payload: { "booking_token": "<raw_qr_json>", "timestamp": "<ISO8601>" }
+        Backend validates booking_token and responds on gate_command.
         """
-        return f"{Topics.PREFIX}/{plot_id}/{Topics.COMMAND}"
-
-    @staticmethod
-    def status(plot_id: int) -> str:
-        """
-        Build the status topic for a plot (RPi → backend).
-
-        The RPi publishes to this topic to report action results:
-        - reserved: Slot successfully reserved (includes slot_id)
-        - freed: Vehicle departed, slot freed
-
-        Args:
-            plot_id: The parking plot ID this device manages
-
-        Returns:
-            Topic string, e.g. "parking/plot/1/status"
-        """
-        return f"{Topics.PREFIX}/{plot_id}/{Topics.STATUS}"
+        return f"{Topics.PREFIX}/{plot_id}/{Topics.ENTRY_SCAN}"
 
     @staticmethod
     def heartbeat(plot_id: int) -> str:
         """
-        Build the heartbeat topic for a plot (RPi → backend).
+        Pi publishes here periodically for device health monitoring.
 
-        The RPi publishes to this topic periodically for health monitoring.
-        Payload includes device status and available slot counts.
-
-        Args:
-            plot_id: The parking plot ID this device manages
-
-        Returns:
-            Topic string, e.g. "parking/plot/1/heartbeat"
+        Payload: { "device_id", "status", "timestamp" }
         """
         return f"{Topics.PREFIX}/{plot_id}/{Topics.HEARTBEAT}"
 
+    # ---------------------------------------------------------------------------
+    # Pi subscribes
+    # ---------------------------------------------------------------------------
+
     @staticmethod
-    def parse_plot_id(topic: str) -> int | None:
+    def gate_command(plot_id: int) -> str:
+        """
+        Backend publishes here to control the servo gate barrier.
+
+        Payload: { "action": "open" } or { "action": "close" }
+        """
+        return f"{Topics.PREFIX}/{plot_id}/{Topics.GATE_COMMAND}"
+
+    @staticmethod
+    def entry_verified(plot_id: int) -> str:
+        """
+        Backend publishes here after validating QR token for entry.
+
+        Payload: { "booking_id", "vehicle_id", "vehicle_number", "timestamp", "status" }
+        Pi logs this but gate action is driven by gate_command.
+        """
+        return f"{Topics.PREFIX}/{plot_id}/{Topics.ENTRY_VERIFIED}"
+
+    @staticmethod
+    def alerts(plot_id: int) -> str:
+        """
+        Backend publishes alerts here (unauthorised QR, device offline, etc.).
+
+        Payload: { "type", "message", "timestamp" }
+        """
+        return f"{Topics.PREFIX}/{plot_id}/{Topics.ALERTS}"
+
+    # ---------------------------------------------------------------------------
+    # Utility
+    # ---------------------------------------------------------------------------
+
+    @staticmethod
+    def parse_plot_id(topic: str) -> "int | None":
         """
         Extract the plot_id from an MQTT topic string.
 
         Args:
-            topic: Full topic string, e.g. "parking/plot/1/command"
+            topic: Full topic string, e.g. "parking/plot/1/gate_command"
 
         Returns:
             The plot_id as int, or None if the topic format is invalid

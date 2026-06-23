@@ -43,17 +43,21 @@ _[Visit the Google Stitch Workspace to view the UI](https://stitch.withgoogle.co
 
 ```
 idp_rpi/
-├── .env.example          # Environment variable template
+├── .env.example          # Environment variable template (includes GPIO pin config)
 ├── .gitignore            # Python gitignore
 ├── README.md             # This file
 ├── requirements.txt      # Python dependencies
 ├── config.py             # Device configuration (reads from .env)
-├── main.py               # Entry point — starts MQTT service
+├── main.py               # Entry point — wires hardware + MQTT + heartbeat
+├── hardware/
+│   ├── __init__.py       # Package exports
+│   ├── gpio_controller.py# Servo motor + LED GPIO driver (stubs on non-Pi)
+│   └── slot_manager.py   # Physical slot state machine (FREE/RESERVED/OCCUPIED)
 ├── mqtt/
 │   ├── __init__.py       # Package exports
 │   ├── client.py         # MQTT connection manager (TLS, reconnect)
-│   ├── handlers.py       # Command dispatcher + action handler stubs
-│   ├── heartbeat.py      # Periodic heartbeat publisher
+│   ├── handlers.py       # Command dispatcher wired to hardware (reserve/unlock/lock)
+│   ├── heartbeat.py      # Periodic heartbeat publisher (live slot counts)
 │   └── topics.py         # Topic constants & builders
 └── tests/
     ├── __init__.py
@@ -127,22 +131,52 @@ python -m pytest tests/test_handlers.py -v
 
 ---
 
-## Adding Hardware Control
+## Hardware Control
 
-The handler stubs in `mqtt/handlers.py` are ready for hardware integration. Each handler has a `# TODO` comment indicating where to add GPIO/servo/sensor code:
+Physical hardware is controlled through the `hardware/` module.
 
-```python
-def _handle_reserve(self, data: dict) -> None:
-    # ...
-    # TODO: Activate hardware indicator (LED/display) for the assigned slot
-    # ...
+### GPIO Controller (`hardware/gpio_controller.py`)
+
+Controls servo motors (gate barriers) and dual-colour LED indicators for each slot via BCM-numbered GPIO pins.
+
+| Action | Servo | LED |
+|--------|-------|-----|
+| Slot free (after lock) | Closes to 0° (2.5% duty) | Green ON, Red OFF |
+| Slot reserved (after reserve) | Stays closed | Red blinks 3× then stays ON |
+| Slot occupied (after unlock) | Opens to 90° (7.5% duty) | Red ON |
+
+**Servo wiring** (SG90 / MG90S):
+- Signal pin → configured `SERVO_PINS[n]` (PWM at 50 Hz)
+- VCC → 5 V rail
+- GND → common ground
+
+**LED wiring** (per slot):
+- Green LED anode → `LED_GREEN_PINS[n]` (via 220 Ω resistor)
+- Red   LED anode → `LED_RED_PINS[n]`   (via 220 Ω resistor)
+- Cathodes → GND
+
+### Slot Manager (`hardware/slot_manager.py`)
+
+Maintains a thread-safe state machine for each physical parking slot:
+
+```
+FREE ──[reserve]──► RESERVED ──[unlock]──► OCCUPIED
+ ▲                                              │
+ └─────────────────[lock]──────────────────────┘
 ```
 
-The handlers will be extended with:
-- **Servo motor control** for gate barriers
-- **IR/ultrasonic sensor** integration for slot occupancy detection
-- **LED indicators** for slot status display
-- **Camera module** integration for QR code scanning
+### Simulation Mode
+
+On non-RPi hardware (e.g., your dev laptop), `RPi.GPIO` is not available.
+The system automatically falls back to a stub that logs all GPIO operations
+to the console — so the full MQTT ↔ hardware pipeline can be developed and
+tested without physical hardware.
+
+```
+WARNING | hardware.gpio_controller | RPi.GPIO not found — running in SIMULATION mode
+INFO    | hardware.gpio_controller | [SIM] Gate OPEN  → slot 1 (servo pin 18, duty 7.5%)
+INFO    | hardware.gpio_controller | [SIM] LED BLINK (reserved) → slot 1 (3 blinks)
+```
 
 ---
 

@@ -1,12 +1,12 @@
 """
-MQTT Client for NammaPark RPi Device
+MQTT Client for NammaPark RPi Device (QR Gate Architecture)
 
 Handles the MQTT connection lifecycle to HiveMQ Cloud broker:
 - TLS-encrypted connection (port 8883)
 - Auto-reconnect with exponential backoff
-- Subscribe to command topic on connect
+- Subscribe to gate_command, entry_verified, and alerts on connect
 - Route incoming messages to registered handler
-- Publish outbound messages (status responses, heartbeats)
+- Publish outbound messages (entry_scan, heartbeats)
 - Graceful disconnect
 
 Uses paho-mqtt 1.6.1, matching the IDP backend.
@@ -133,10 +133,15 @@ class MQTTClient:
             self._reconnect_attempts = 0
             self._connected_event.set()
 
-            # Subscribe to the command topic for this plot
-            command_topic = Topics.command(self.plot_id)
-            client.subscribe(command_topic, qos=1)
-            logger.info("Subscribed to: %s", command_topic)
+            # Subscribe to all inbound topics for the QR-gate architecture
+            inbound_topics = [
+                Topics.gate_command(self.plot_id),
+                Topics.entry_verified(self.plot_id),
+                Topics.alerts(self.plot_id),
+            ]
+            for topic in inbound_topics:
+                client.subscribe(topic, qos=1)
+                logger.info("Subscribed to: %s", topic)
         else:
             rc_descriptions = {
                 1: "Incorrect protocol version",
@@ -268,15 +273,15 @@ class MQTTClient:
 
         This is the recommended way to run the RPi service as a long-lived
         process. Handles reconnection automatically.
-        Use disconnect() from a signal handler to break out.
+        Use disconnect() from a signal handler or the caller's finally block
+        to break out — do NOT call disconnect() here to avoid a double-disconnect
+        when main.py already cleans up in its own finally block.
         """
         logger.info("Starting MQTT loop_forever (blocking)")
         try:
             self._client.loop_forever()
         except KeyboardInterrupt:
             logger.info("MQTT loop interrupted by keyboard")
-        finally:
-            self.disconnect()
 
     def is_connected(self) -> bool:
         """Check if currently connected to the MQTT broker."""

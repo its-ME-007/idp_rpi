@@ -2,11 +2,10 @@
 NammaPark RPi Device Configuration
 
 Loads settings from environment variables (.env file or system env).
-All MQTT and device identity settings are centralized here.
+All MQTT, device identity, and hardware GPIO settings are centralised here.
 """
 
 import os
-import sys
 from dotenv import load_dotenv
 
 # Load .env file if present (no error if missing — falls back to system env)
@@ -22,29 +21,59 @@ class DeviceConfig:
     """
 
     # --- MQTT Broker ---
-    MQTT_BROKER: str = os.getenv("MQTT_BROKER", "")
-    MQTT_PORT: int = int(os.getenv("MQTT_PORT", "8883"))
+    MQTT_BROKER: str   = os.getenv("MQTT_BROKER", "")
+    MQTT_PORT: int     = int(os.getenv("MQTT_PORT", "8883"))
     MQTT_USERNAME: str = os.getenv("MQTT_USERNAME", "")
     MQTT_PASSWORD: str = os.getenv("MQTT_PASSWORD", "")
 
     # --- Device Identity ---
     DEVICE_ID: str = os.getenv("DEVICE_ID", "RPi-Unknown")
-    PLOT_ID: int = int(os.getenv("PLOT_ID", "0"))
+    PLOT_ID: int   = int(os.getenv("PLOT_ID", "0"))
 
     # --- Heartbeat ---
     HEARTBEAT_INTERVAL: int = int(os.getenv("HEARTBEAT_INTERVAL", "60"))
 
-    # --- Slot Capacity (static defaults — replaced by sensor data later) ---
-    TOTAL_SLOTS_2W: int = int(os.getenv("TOTAL_SLOTS_2W", "5"))
-    TOTAL_SLOTS_4W: int = int(os.getenv("TOTAL_SLOTS_4W", "3"))
-
     # --- Reconnect ---
-    RECONNECT_MAX_ATTEMPTS: int = int(os.getenv("RECONNECT_MAX_ATTEMPTS", "0"))  # 0 = unlimited
-    RECONNECT_BASE_DELAY: float = float(os.getenv("RECONNECT_BASE_DELAY", "1.0"))
-    RECONNECT_MAX_DELAY: float = float(os.getenv("RECONNECT_MAX_DELAY", "60.0"))
+    RECONNECT_MAX_ATTEMPTS: int  = int(os.getenv("RECONNECT_MAX_ATTEMPTS", "0"))   # 0 = unlimited
+    RECONNECT_BASE_DELAY: float  = float(os.getenv("RECONNECT_BASE_DELAY", "1.0"))
+    RECONNECT_MAX_DELAY: float   = float(os.getenv("RECONNECT_MAX_DELAY", "60.0"))
 
     # --- Logging ---
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+
+    # =========================================================================
+    # Hardware / GPIO Configuration (BCM pin numbering)
+    # =========================================================================
+    #
+    # A single servo motor controls the main gate barrier.
+    #
+    #   SERVO_PIN — BCM GPIO pin connected to servo signal wire
+    #
+    # Servo duty-cycle positions (50 Hz PWM, SG90/MG90S compatible):
+    #   SERVO_OPEN_DUTY  — duty % when gate is open  (default 7.5% ≈ 90°)
+    #   SERVO_CLOSE_DUTY — duty % when gate is closed (default 2.5% ≈ 0°)
+    #   SERVO_OPEN_DURATION — seconds to keep gate open before auto-closing
+
+    SERVO_PIN: int           = int(os.getenv("SERVO_PIN", "18"))
+    SERVO_PWM_FREQ: int      = int(os.getenv("SERVO_PWM_FREQ", "50"))
+    SERVO_OPEN_DUTY: float   = float(os.getenv("SERVO_OPEN_DUTY", "7.5"))
+    SERVO_CLOSE_DUTY: float  = float(os.getenv("SERVO_CLOSE_DUTY", "2.5"))
+    SERVO_OPEN_DURATION: int = int(os.getenv("SERVO_OPEN_DURATION", "5"))
+
+    # =========================================================================
+    # Camera / QR Configuration
+    # =========================================================================
+    #
+    #   CAMERA_INDEX      — OpenCV camera index (0 = default/Pi Camera via V4L2)
+    #   QR_SCAN_INTERVAL  — Seconds between scan attempts (reduce CPU load)
+    #   QR_COOLDOWN       — Seconds to ignore re-scans of the same QR (dedup)
+    #   CAMERA_WIDTH/HEIGHT — Capture resolution
+
+    CAMERA_INDEX: int      = int(os.getenv("CAMERA_INDEX", "0"))
+    QR_SCAN_INTERVAL: float = float(os.getenv("QR_SCAN_INTERVAL", "0.5"))
+    QR_COOLDOWN: int       = int(os.getenv("QR_COOLDOWN", "10"))
+    CAMERA_WIDTH: int      = int(os.getenv("CAMERA_WIDTH", "640"))
+    CAMERA_HEIGHT: int     = int(os.getenv("CAMERA_HEIGHT", "480"))
 
     @classmethod
     def validate(cls) -> list[str]:
@@ -77,14 +106,17 @@ class DeviceConfig:
         print("=" * 60)
         print("  NammaPark RPi Device Configuration")
         print("=" * 60)
-        print(f"  Broker:     {cls.MQTT_BROKER}:{cls.MQTT_PORT}")
-        print(f"  Username:   {cls.MQTT_USERNAME}")
-        print(f"  Password:   {'*' * len(cls.MQTT_PASSWORD) if cls.MQTT_PASSWORD else '(not set)'}")
-        print(f"  Device ID:  {cls.DEVICE_ID}")
-        print(f"  Plot ID:    {cls.PLOT_ID}")
-        print(f"  Heartbeat:  every {cls.HEARTBEAT_INTERVAL}s")
-        print(f"  Slots:      2W={cls.TOTAL_SLOTS_2W}, 4W={cls.TOTAL_SLOTS_4W}")
-        print(f"  Log Level:  {cls.LOG_LEVEL}")
+        print(f"  Broker:           {cls.MQTT_BROKER}:{cls.MQTT_PORT}")
+        print(f"  Username:         {cls.MQTT_USERNAME}")
+        print(f"  Password:         {'*' * len(cls.MQTT_PASSWORD) if cls.MQTT_PASSWORD else '(not set)'}")
+        print(f"  Device ID:        {cls.DEVICE_ID}")
+        print(f"  Plot ID:          {cls.PLOT_ID}")
+        print(f"  Heartbeat:        every {cls.HEARTBEAT_INTERVAL}s")
+        print(f"  Servo pin:        GPIO{cls.SERVO_PIN}  (open={cls.SERVO_OPEN_DUTY}%, close={cls.SERVO_CLOSE_DUTY}%)")
+        print(f"  Gate open for:    {cls.SERVO_OPEN_DURATION}s then auto-closes")
+        print(f"  Camera index:     {cls.CAMERA_INDEX}  ({cls.CAMERA_WIDTH}x{cls.CAMERA_HEIGHT})")
+        print(f"  QR scan interval: {cls.QR_SCAN_INTERVAL}s  |  cooldown: {cls.QR_COOLDOWN}s")
+        print(f"  Log Level:        {cls.LOG_LEVEL}")
         print("=" * 60)
 
 

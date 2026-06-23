@@ -1,19 +1,20 @@
 """
-Heartbeat Service for NammaPark RPi Device
+Heartbeat Service — NammaPark RPi Device (QR Gate Architecture)
 
 Publishes periodic heartbeat messages to the backend via MQTT.
 The backend uses these to track device health and mark offline devices.
 
 Topic: parking/plot/{plot_id}/heartbeat
 
-Payload format (must match what backend's heartbeat_handler.py expects):
+Payload (matches backend's heartbeat_handler.py):
     {
-        "device_id": "<device_name>",
-        "status": "online",
-        "timestamp": "<ISO8601>",
-        "available_slots_2w": <count>,
-        "available_slots_4w": <count>
+        "device_id":  "<device_name>",
+        "status":     "online",
+        "timestamp":  "<ISO8601>"
     }
+
+Note: available_slots_2w / available_slots_4w are not included in the
+QR-gate architecture (no slot management on device side).
 """
 
 import json
@@ -53,62 +54,46 @@ class HeartbeatService:
         device_id: str,
         publish_fn: Callable[[str, str, int], bool],
         interval_seconds: int = 60,
-        total_slots_2w: int = 5,
-        total_slots_4w: int = 3,
     ):
         """
-        Initialize the heartbeat service.
+        Initialise the heartbeat service.
 
         Args:
-            plot_id: Parking plot ID this device manages
-            device_id: Unique device identifier
-            publish_fn: Function to publish MQTT messages — signature: (topic, payload, qos) -> bool
-            interval_seconds: Time between heartbeats in seconds
-            total_slots_2w: Total 2-wheeler slots (default capacity)
-            total_slots_4w: Total 4-wheeler slots (default capacity)
+            plot_id:          Parking plot ID this device manages
+            device_id:        Unique device identifier
+            publish_fn:       Function to publish MQTT messages — (topic, payload, qos) -> bool
+            interval_seconds: Time between heartbeats in seconds (min 10)
         """
-        self.plot_id = plot_id
-        self.device_id = device_id
-        self._publish_fn = publish_fn
+        self.plot_id          = plot_id
+        self.device_id        = device_id
+        self._publish_fn      = publish_fn
         self.interval_seconds = interval_seconds
 
-        # Slot counts (static defaults, will be replaced by sensor data)
-        self._available_slots_2w = total_slots_2w
-        self._available_slots_4w = total_slots_4w
-
         # Thread management
-        self._running = False
+        self._running     = False
         self._thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
+        self._stop_event  = threading.Event()
 
         logger.info(
-            "Heartbeat service initialized: device=%s, plot=%d, interval=%ds",
+            "Heartbeat service initialised: device=%s, plot=%d, interval=%ds",
             device_id, plot_id, interval_seconds,
         )
 
     def _build_payload(self) -> str:
-        """
-        Build the heartbeat JSON payload.
-
-        Returns:
-            JSON string matching the backend's expected format.
-        """
-        payload = {
+        """Build the heartbeat JSON payload."""
+        return json.dumps({
             "device_id": self.device_id,
-            "status": "online",
+            "status":    "online",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "available_slots_2w": self._available_slots_2w,
-            "available_slots_4w": self._available_slots_4w,
-        }
-        return json.dumps(payload)
+        })
 
     def _heartbeat_loop(self) -> None:
-        """Background thread loop: publish heartbeats at the configured interval."""
+        """Background thread: publish heartbeats at the configured interval."""
         logger.info("Heartbeat loop started (interval=%ds)", self.interval_seconds)
 
         while not self._stop_event.is_set():
             try:
-                topic = Topics.heartbeat(self.plot_id)
+                topic   = Topics.heartbeat(self.plot_id)
                 payload = self._build_payload()
                 success = self._publish_fn(topic, payload, 1)
 
@@ -117,10 +102,9 @@ class HeartbeatService:
                 else:
                     logger.warning("Heartbeat publish failed (will retry next interval)")
 
-            except Exception as e:
-                logger.error("Error in heartbeat loop: %s", e, exc_info=True)
+            except Exception as exc:
+                logger.error("Error in heartbeat loop: %s", exc, exc_info=True)
 
-            # Wait for the interval or until stop is signaled
             self._stop_event.wait(timeout=self.interval_seconds)
 
         logger.info("Heartbeat loop stopped")
@@ -145,30 +129,13 @@ class HeartbeatService:
         """Stop the heartbeat background thread."""
         if not self._running:
             return
-
         self._running = False
         self._stop_event.set()
-
         if self._thread:
             self._thread.join(timeout=5)
-
         logger.info("Heartbeat service stopped")
-
-    def update_slot_counts(self, available_2w: int, available_4w: int) -> None:
-        """
-        Update the available slot counts reported in heartbeats.
-
-        Call this from the hardware layer when sensor data changes.
-
-        Args:
-            available_2w: Current number of free 2-wheeler slots
-            available_4w: Current number of free 4-wheeler slots
-        """
-        self._available_slots_2w = available_2w
-        self._available_slots_4w = available_4w
-        logger.debug("Slot counts updated: 2W=%d, 4W=%d", available_2w, available_4w)
 
     @property
     def is_running(self) -> bool:
-        """Check if the heartbeat service is currently running."""
+        """True if the heartbeat service is currently running."""
         return self._running

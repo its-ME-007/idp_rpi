@@ -1,282 +1,218 @@
 """
-Tests for Command Dispatcher and Handlers
+Tests for GateCommandHandler — NammaPark RPi (QR Gate Architecture)
 
 Validates:
-1. Commands are dispatched to the correct handler based on action
-2. Reserve handler publishes 'reserved' status with slot_id
-3. Lock handler publishes 'freed' status
-4. Malformed payloads are handled gracefully (no crash)
-5. Unknown actions are logged and ignored
+1. gate_command "open" triggers gate.open()
+2. gate_command "close" triggers gate.close()
+3. Unknown gate_command actions are ignored gracefully
+4. entry_verified messages are logged for both verified and rejected status
+5. alert messages are logged without crashing
+6. Malformed / non-JSON payloads are handled gracefully
+7. Messages on unrecognised topic suffixes are silently ignored
 """
 
 import json
 import sys
 import os
 import unittest
+from unittest.mock import MagicMock, call
 
 # Ensure project root is on the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from mqtt.handlers import CommandDispatcher
-from mqtt.topics import Topics
+from mqtt.handlers import GateCommandHandler
 
 
-class MockPublisher:
-    """Captures published messages for test assertions."""
-
-    def __init__(self):
-        self.published: list[tuple[str, str, int]] = []
-
-    def publish(self, topic: str, payload: str, qos: int = 1) -> bool:
-        self.published.append((topic, payload, qos))
-        return True
-
-    @property
-    def last_published(self) -> tuple[str, str, int] | None:
-        return self.published[-1] if self.published else None
-
-    @property
-    def last_payload_dict(self) -> dict | None:
-        if self.last_published:
-            return json.loads(self.last_published[1])
-        return None
-
-    def clear(self):
-        self.published.clear()
+def _make_handler() -> tuple["GateCommandHandler", MagicMock]:
+    """Return a (handler, mock_gate) pair for testing."""
+    mock_gate = MagicMock()
+    handler = GateCommandHandler(gate_controller=mock_gate)
+    return handler, mock_gate
 
 
-class TestCommandDispatcher(unittest.TestCase):
-    """Test command dispatch routing."""
+class TestGateCommandOpen(unittest.TestCase):
+    """gate_command with action=open should call gate.open()."""
 
     def setUp(self):
-        self.publisher = MockPublisher()
-        self.dispatcher = CommandDispatcher(plot_id=1, publish_fn=self.publisher.publish)
+        self.handler, self.gate = _make_handler()
 
-    def test_reserve_command_dispatches(self):
-        """Reserve command triggers handler and publishes 'reserved' status."""
+    def test_open_action_calls_gate_open(self):
+        payload = json.dumps({"action": "open"})
+        self.handler.handle("parking/plot/1/gate_command", payload)
+        self.gate.open.assert_called_once()
+        self.gate.close.assert_not_called()
+
+    def test_open_action_case_insensitive(self):
+        """Action matching should be case-insensitive."""
+        for variant in ["OPEN", "Open", "oPeN"]:
+            self.gate.reset_mock()
+            payload = json.dumps({"action": variant})
+            self.handler.handle("parking/plot/1/gate_command", payload)
+            self.gate.open.assert_called_once()
+
+
+class TestGateCommandClose(unittest.TestCase):
+    """gate_command with action=close should call gate.close()."""
+
+    def setUp(self):
+        self.handler, self.gate = _make_handler()
+
+    def test_close_action_calls_gate_close(self):
+        payload = json.dumps({"action": "close"})
+        self.handler.handle("parking/plot/1/gate_command", payload)
+        self.gate.close.assert_called_once()
+        self.gate.open.assert_not_called()
+
+    def test_close_action_case_insensitive(self):
+        for variant in ["CLOSE", "Close", "cLoSe"]:
+            self.gate.reset_mock()
+            payload = json.dumps({"action": variant})
+            self.handler.handle("parking/plot/1/gate_command", payload)
+            self.gate.close.assert_called_once()
+
+
+class TestGateCommandUnknownAction(unittest.TestCase):
+    """Unknown gate_command actions should be ignored (no gate movement)."""
+
+    def setUp(self):
+        self.handler, self.gate = _make_handler()
+
+    def test_unknown_action_no_gate_movement(self):
+        payload = json.dumps({"action": "explode"})
+        self.handler.handle("parking/plot/1/gate_command", payload)
+        self.gate.open.assert_not_called()
+        self.gate.close.assert_not_called()
+
+    def test_missing_action_field_no_gate_movement(self):
+        payload = json.dumps({"foo": "bar"})
+        self.handler.handle("parking/plot/1/gate_command", payload)
+        self.gate.open.assert_not_called()
+        self.gate.close.assert_not_called()
+
+
+class TestGateHardwareErrors(unittest.TestCase):
+    """Exceptions from the gate controller should be caught (no crash)."""
+
+    def setUp(self):
+        self.handler, self.gate = _make_handler()
+
+    def test_open_raises_no_propagation(self):
+        self.gate.open.side_effect = RuntimeError("servo jammed")
+        payload = json.dumps({"action": "open"})
+        # Should NOT raise
+        try:
+            self.handler.handle("parking/plot/1/gate_command", payload)
+        except Exception as exc:
+            self.fail(f"Handler should not propagate hardware exception: {exc}")
+
+    def test_close_raises_no_propagation(self):
+        self.gate.close.side_effect = RuntimeError("GPIO error")
+        payload = json.dumps({"action": "close"})
+        try:
+            self.handler.handle("parking/plot/1/gate_command", payload)
+        except Exception as exc:
+            self.fail(f"Handler should not propagate hardware exception: {exc}")
+
+
+class TestEntryVerifiedMessages(unittest.TestCase):
+    """entry_verified messages should be processed without touching the gate."""
+
+    def setUp(self):
+        self.handler, self.gate = _make_handler()
+
+    def test_verified_status_no_gate_movement(self):
         payload = json.dumps({
-            "action": "reserve",
-            "booking_id": 101,
-            "slot_type": "2W"
+            "booking_id": 42,
+            "vehicle_id": 7,
+            "vehicle_number": "KA01AB1234",
+            "timestamp": "2026-06-23T10:00:00+00:00",
+            "status": "verified",
         })
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
+        self.handler.handle("parking/plot/1/entry_verified", payload)
+        self.gate.open.assert_not_called()
+        self.gate.close.assert_not_called()
 
-        # Should have published a status response
-        self.assertEqual(len(self.publisher.published), 1)
-
-        topic, response_str, qos = self.publisher.published[0]
-        response = json.loads(response_str)
-
-        self.assertEqual(topic, "parking/plot/1/status")
-        self.assertEqual(response["action"], "reserved")
-        self.assertEqual(response["booking_id"], 101)
-        self.assertIn("slot_id", response)
-        self.assertIsInstance(response["slot_id"], int)
-
-    def test_reserve_assigns_incrementing_slot_ids(self):
-        """Each reserve gets a unique slot_id."""
-        for booking_id in [1, 2, 3]:
-            payload = json.dumps({
-                "action": "reserve",
-                "booking_id": booking_id,
-                "slot_type": "4W"
-            })
-            self.dispatcher.dispatch("parking/plot/1/command", payload)
-
-        # Should have 3 publishes with distinct slot_ids
-        slot_ids = [json.loads(p[1])["slot_id"] for p in self.publisher.published]
-        self.assertEqual(len(set(slot_ids)), 3, "Each reservation should get a unique slot_id")
-
-    def test_unlock_command_dispatches(self):
-        """Unlock command is handled without publishing status (log-only for now)."""
+    def test_rejected_status_no_gate_movement(self):
         payload = json.dumps({
-            "action": "unlock",
-            "booking_id": 101,
-            "slot_id": 5
+            "booking_id": 99,
+            "vehicle_number": "MH02XY5678",
+            "timestamp": "2026-06-23T10:01:00+00:00",
+            "status": "rejected",
         })
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
+        self.handler.handle("parking/plot/1/entry_verified", payload)
+        self.gate.open.assert_not_called()
+        self.gate.close.assert_not_called()
 
-        # Unlock doesn't publish a status response (just activates hardware)
-        self.assertEqual(len(self.publisher.published), 0)
+    def test_minimal_payload_no_crash(self):
+        """Missing optional fields should not crash the handler."""
+        payload = json.dumps({"status": "verified"})
+        try:
+            self.handler.handle("parking/plot/1/entry_verified", payload)
+        except Exception as exc:
+            self.fail(f"Handler crashed on minimal entry_verified payload: {exc}")
 
-    def test_lock_command_publishes_freed(self):
-        """Lock command publishes 'freed' status if booking was tracked."""
-        # First reserve a slot
-        reserve_payload = json.dumps({
-            "action": "reserve",
-            "booking_id": 201,
-            "slot_type": "2W"
-        })
-        self.dispatcher.dispatch("parking/plot/1/command", reserve_payload)
 
-        # Get the assigned slot_id
-        reserved_response = json.loads(self.publisher.published[0][1])
-        slot_id = reserved_response["slot_id"]
+class TestAlertMessages(unittest.TestCase):
+    """alert messages should be logged without crashing or touching the gate."""
 
-        self.publisher.clear()
+    def setUp(self):
+        self.handler, self.gate = _make_handler()
 
-        # Now lock that slot
-        lock_payload = json.dumps({
-            "action": "lock",
-            "slot_id": slot_id
-        })
-        self.dispatcher.dispatch("parking/plot/1/command", lock_payload)
-
-        # Should publish 'freed' status
-        self.assertEqual(len(self.publisher.published), 1)
-        response = json.loads(self.publisher.published[0][1])
-        self.assertEqual(response["action"], "freed")
-        self.assertEqual(response["booking_id"], 201)
-        self.assertEqual(response["slot_id"], slot_id)
-
-    def test_lock_unknown_slot_no_publish(self):
-        """Lock for an untracked slot doesn't publish (no booking to free)."""
+    def test_alert_no_gate_movement(self):
         payload = json.dumps({
-            "action": "lock",
-            "slot_id": 999
+            "type": "unauthorised_qr",
+            "message": "Unrecognised token scanned",
+            "timestamp": "2026-06-23T10:05:00+00:00",
         })
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
+        self.handler.handle("parking/plot/1/alerts", payload)
+        self.gate.open.assert_not_called()
+        self.gate.close.assert_not_called()
 
-        # No status published for unknown slot
-        self.assertEqual(len(self.publisher.published), 0)
+    def test_minimal_alert_no_crash(self):
+        payload = json.dumps({})
+        try:
+            self.handler.handle("parking/plot/1/alerts", payload)
+        except Exception as exc:
+            self.fail(f"Handler crashed on empty alert payload: {exc}")
 
 
 class TestMalformedPayloads(unittest.TestCase):
-    """Test graceful handling of bad inputs."""
+    """Malformed / non-JSON payloads should be handled gracefully (no crash)."""
 
     def setUp(self):
-        self.publisher = MockPublisher()
-        self.dispatcher = CommandDispatcher(plot_id=1, publish_fn=self.publisher.publish)
+        self.handler, self.gate = _make_handler()
 
-    def test_invalid_json(self):
-        """Invalid JSON should be logged and ignored, not crash."""
-        self.dispatcher.dispatch("parking/plot/1/command", "not valid json {{{")
-        self.assertEqual(len(self.publisher.published), 0)
+    def test_invalid_json_no_crash(self):
+        self.handler.handle("parking/plot/1/gate_command", "not json {{{")
+        self.gate.open.assert_not_called()
 
-    def test_missing_action_field(self):
-        """Payload without 'action' should be ignored."""
-        payload = json.dumps({"booking_id": 1, "slot_type": "2W"})
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
-        self.assertEqual(len(self.publisher.published), 0)
+    def test_empty_payload_no_crash(self):
+        self.handler.handle("parking/plot/1/gate_command", "")
+        self.gate.open.assert_not_called()
 
-    def test_unknown_action(self):
-        """Unknown action should be logged and ignored."""
-        payload = json.dumps({"action": "explode", "data": 42})
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
-        self.assertEqual(len(self.publisher.published), 0)
-
-    def test_reserve_missing_booking_id(self):
-        """Reserve without booking_id should not publish."""
-        payload = json.dumps({"action": "reserve", "slot_type": "2W"})
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
-        self.assertEqual(len(self.publisher.published), 0)
-
-    def test_reserve_missing_slot_type(self):
-        """Reserve without slot_type should not publish."""
-        payload = json.dumps({"action": "reserve", "booking_id": 1})
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
-        self.assertEqual(len(self.publisher.published), 0)
-
-    def test_unlock_missing_fields(self):
-        """Unlock without required fields should not crash."""
-        payload = json.dumps({"action": "unlock"})
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
-        self.assertEqual(len(self.publisher.published), 0)
-
-    def test_lock_missing_slot_id(self):
-        """Lock without slot_id should not crash."""
-        payload = json.dumps({"action": "lock"})
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
-        self.assertEqual(len(self.publisher.published), 0)
-
-    def test_empty_payload(self):
-        """Empty string payload should be handled gracefully."""
-        self.dispatcher.dispatch("parking/plot/1/command", "")
-        self.assertEqual(len(self.publisher.published), 0)
+    def test_non_dict_json_no_crash(self):
+        self.handler.handle("parking/plot/1/gate_command", json.dumps([1, 2, 3]))
+        self.gate.open.assert_not_called()
 
 
-class TestStatusResponseFormat(unittest.TestCase):
-    """Validate that status responses match what the backend expects."""
+class TestUnknownTopicSuffix(unittest.TestCase):
+    """Messages on unrecognised suffixes are silently ignored."""
 
     def setUp(self):
-        self.publisher = MockPublisher()
-        self.dispatcher = CommandDispatcher(plot_id=3, publish_fn=self.publisher.publish)
+        self.handler, self.gate = _make_handler()
 
-    def test_reserved_response_format(self):
-        """
-        Reserved response must match backend's status_handler.py expected format:
-            { "action": "reserved", "booking_id": <int>, "slot_id": <int> }
-        """
-        payload = json.dumps({
-            "action": "reserve",
-            "booking_id": 42,
-            "slot_type": "4W"
-        })
-        self.dispatcher.dispatch("parking/plot/3/command", payload)
+    def test_unknown_suffix_no_crash(self):
+        payload = json.dumps({"data": "whatever"})
+        try:
+            self.handler.handle("parking/plot/1/unknown_topic", payload)
+        except Exception as exc:
+            self.fail(f"Handler crashed on unknown topic suffix: {exc}")
 
-        response = self.publisher.last_payload_dict
-        self.assertIsNotNone(response)
-
-        # Validate all required fields are present
-        self.assertIn("action", response)
-        self.assertIn("booking_id", response)
-        self.assertIn("slot_id", response)
-
-        # Validate types
-        self.assertEqual(response["action"], "reserved")
-        self.assertIsInstance(response["booking_id"], int)
-        self.assertIsInstance(response["slot_id"], int)
-
-    def test_status_published_to_correct_topic(self):
-        """Status responses must go to parking/plot/{plot_id}/status."""
-        payload = json.dumps({
-            "action": "reserve",
-            "booking_id": 1,
-            "slot_type": "2W"
-        })
-        self.dispatcher.dispatch("parking/plot/3/command", payload)
-
-        topic = self.publisher.published[0][0]
-        self.assertEqual(topic, "parking/plot/3/status")
-
-
-class TestActiveReservations(unittest.TestCase):
-    """Test slot assignment tracking."""
-
-    def setUp(self):
-        self.publisher = MockPublisher()
-        self.dispatcher = CommandDispatcher(plot_id=1, publish_fn=self.publisher.publish)
-
-    def test_reservation_tracked(self):
-        """After reserve, booking → slot mapping is tracked."""
-        payload = json.dumps({
-            "action": "reserve",
-            "booking_id": 10,
-            "slot_type": "2W"
-        })
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
-
-        reservations = self.dispatcher.get_active_reservations()
-        self.assertIn(10, reservations)
-
-    def test_lock_removes_tracking(self):
-        """After lock, the booking → slot mapping is removed."""
-        # Reserve
-        payload = json.dumps({
-            "action": "reserve",
-            "booking_id": 20,
-            "slot_type": "4W"
-        })
-        self.dispatcher.dispatch("parking/plot/1/command", payload)
-
-        slot_id = json.loads(self.publisher.published[0][1])["slot_id"]
-
-        # Lock
-        lock_payload = json.dumps({"action": "lock", "slot_id": slot_id})
-        self.dispatcher.dispatch("parking/plot/1/command", lock_payload)
-
-        reservations = self.dispatcher.get_active_reservations()
-        self.assertNotIn(20, reservations)
+    def test_unknown_suffix_no_gate_movement(self):
+        payload = json.dumps({"action": "open"})
+        self.handler.handle("parking/plot/1/totally_unknown", payload)
+        self.gate.open.assert_not_called()
+        self.gate.close.assert_not_called()
 
 
 if __name__ == "__main__":
