@@ -1,4 +1,23 @@
-import json, logging, time
+"""
+rpi_pipeline_smoke.py — NammaPark RPi local pipeline smoke test
+================================================================
+Exercises the on-device pipeline (no broker, no camera, no Pi):
+  1. GateController open/close (simulation)
+  2. QR payload validation (parse_qr_payload)
+  3. QRScanner injection + cooldown + plot_id filtering → mock publish
+  4. GateCommandHandler routing (gate_command / entry_verified / alerts)
+
+This is a runnable script, NOT a pytest test — it executes top-level code with
+side effects and asserts. It lives under tests/laptop/ so pytest does not collect
+it. Run it from anywhere:
+
+    python tests/laptop/rpi_pipeline_smoke.py
+"""
+
+import json, logging, os, sys, time
+
+# Make the project root importable regardless of the current working directory
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
 
@@ -92,7 +111,7 @@ handler.handle("parking/plot/1/entry_verified", json.dumps({
     "timestamp": "2026-06-23T11:00:00Z"
 }))
 handler.handle("parking/plot/1/alerts", json.dumps({
-    "type": "unauthorized_qr",
+    "type": "unauthorised_qr",
     "message": "Unknown token scanned",
     "timestamp": "2026-06-23T11:00:01Z"
 }))

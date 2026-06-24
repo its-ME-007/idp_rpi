@@ -4,6 +4,14 @@ python-dotenv==1.0.0
 # QR decoding (no GUI — headless-safe for Pi OS)
 opencv-python-headless>=4.8.0
 
+# GPIO / servo control (Pi only — do NOT install on a laptop).
+# Provides the RPi.GPIO API. On current Raspberry Pi OS (Bookworm) the classic
+# RPi.GPIO will not load; use the drop-in rpi-lgpio instead. Install ONE of:
+#   pip uninstall RPi.GPIO && pip install rpi-lgpio   # Bookworm + Bullseye (recommended)
+#   sudo apt install -y python3-rpi.gpio              # Bullseye, with venv --system-site-packages
+# Note: rpi-lgpio and RPi.GPIO conflict — only one may be installed.
+# rpi-lgpio
+
 # Pi Camera Module V2 driver
 # Install via apt on the Pi (preferred — includes libcamera native bindings):
 #   sudo apt install -y python3-picamera2
