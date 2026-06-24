@@ -16,10 +16,22 @@ Set your credentials in the CONFIG block below or via env vars.
 import json
 import os
 import ssl
+import sys
 import time
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load credentials from the repo-root .env (two levels up from tests/laptop)
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+# Ensure Unicode output (box-drawing chars) works on Windows cp1252 consoles
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    pass
 
 # ── CONFIG ─────────────────────────────────────────────────────────────────
 BROKER   = os.getenv("MQTT_BROKER",   "your_broker.s1.eu.hivemq.cloud")

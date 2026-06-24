@@ -58,11 +58,23 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-
+import secrets
 import paho.mqtt.client as mqtt
 
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load credentials from the repo-root .env (two levels up from tests/laptop)
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+# Ensure Unicode output (box-drawing chars) works on Windows cp1252 consoles
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except (AttributeError, ValueError):
+    pass
+
 # ── CONFIG ──────────────────────────────────────────────────────────────────
-BROKER    = os.getenv("MQTT_BROKER",   "your_broker.s1.eu.hivemq.cloud")
+BROKER    = os.getenv("MQTT_BROKER",   "_.s1.eu.hivemq.cloud") # have to insert mqtt broker value
 PORT      = int(os.getenv("MQTT_PORT", "8883"))
 USERNAME  = os.getenv("MQTT_USERNAME", "your_mqtt_username")
 PASSWORD  = os.getenv("MQTT_PASSWORD", "your_mqtt_password")
