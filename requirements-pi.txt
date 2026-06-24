@@ -1,0 +1,16 @@
+# Raspberry Pi-only dependencies (do NOT install on a laptop/Windows).
+# On the Pi, inside your venv:
+#   pip install -r requirements.txt -r requirements-pi.txt
+#
+# These wheels only build on Linux/Pi, which is why they're split out of
+# the cross-platform requirements.txt.
+
+# GPIO / servo control. Drop-in RPi.GPIO replacement that works on current
+# Raspberry Pi OS (Bookworm, where classic RPi.GPIO won't load) and older.
+# Conflicts with the classic RPi.GPIO package — only one may be installed.
+rpi-lgpio>=0.6
+
+# Pi Camera Module V2 driver (libcamera stack). Preferred install is apt:
+#   sudo apt install -y python3-picamera2
+# (use a venv created with --system-site-packages so it's visible), or pip:
+# picamera2
