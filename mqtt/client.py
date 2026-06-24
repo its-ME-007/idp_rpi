@@ -91,6 +91,7 @@ class MQTTClient:
         # State
         self.connected = False
         self._connected_event = threading.Event()
+        self._shutdown_event = threading.Event()
         self._message_handler: Optional[Callable[[str, str], None]] = None
 
         # Build the paho MQTT client
@@ -229,10 +230,15 @@ class MQTTClient:
 
     def disconnect(self) -> None:
         """Disconnect from the MQTT broker and stop the network loop."""
+        # Release the main thread parked in loop_forever()
+        self._shutdown_event.set()
+
         if self._client:
             try:
-                self._client.loop_stop()
+                # Send DISCONNECT first (while the background loop is alive to
+                # flush it), then stop the loop thread.
                 self._client.disconnect()
+                self._client.loop_stop()
                 logger.info("MQTT client disconnected")
             except Exception as e:
                 logger.error("Error during MQTT disconnect: %s", e, exc_info=True)
@@ -269,27 +275,21 @@ class MQTTClient:
 
     def loop_forever(self) -> None:
         """
-        Run the MQTT network loop in the foreground (blocking).
+        Block the calling (main) thread until disconnect() is called or the
+        process is interrupted.
 
-        This is the recommended way to run the RPi service as a long-lived
-        process. Handles reconnection automatically.
-        Use disconnect() from a signal handler or the caller's finally block
-        to break out — do NOT call disconnect() here to avoid a double-disconnect
-        when main.py already cleans up in its own finally block.
+        The MQTT network loop already runs in the background thread started by
+        connect()/loop_start(), and paho auto-reconnects there. We must NOT
+        start a second loop here — two loops reading the same TLS socket
+        corrupt the TLS record layer (ssl.SSLError RECORD_LAYER_FAILURE →
+        unexpected rc=7). So we simply park the main thread; the background
+        loop keeps doing all the network I/O and reconnection.
         """
-        logger.info("Starting MQTT loop_forever (blocking)")
-        # connect() called loop_start(), which runs the network loop in a
-        # background thread to drive the connect handshake. Running
-        # loop_forever() now would leave TWO loops reading the same TLS socket
-        # concurrently — that corrupts the TLS record layer (ssl.SSLError
-        # RECORD_LAYER_FAILURE → unexpected rc=7 disconnect). Stop the
-        # background loop first, then block here (paho still auto-reconnects).
+        logger.info("RPi device running — network loop active in background. Ctrl+C to stop.")
         try:
-            self._client.loop_stop()
-        except Exception:
-            pass
-        try:
-            self._client.loop_forever(retry_first_connection=True)
+            # Wait in 1s slices so SIGINT/SIGTERM stays responsive.
+            while not self._shutdown_event.wait(timeout=1.0):
+                pass
         except KeyboardInterrupt:
             logger.info("MQTT loop interrupted by keyboard")
 
