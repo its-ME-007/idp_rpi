@@ -148,6 +148,12 @@ class GateController:
         self._cancel_timer()
         if self._pwm:
             self._pwm.stop()
+            # Release our reference BEFORE GPIO.cleanup() so the PWM object's
+            # destructor runs now (while the gpiochip is still open). Otherwise
+            # rpi-lgpio's PWM.__del__ fires at interpreter exit after cleanup()
+            # has freed the chip, raising "unsupported operand type(s) for &:
+            # 'NoneType' and 'int'" (harmless but noisy).
+            self._pwm = None
         GPIO.cleanup()
         self._is_setup = False
         logger.info("GPIO cleanup complete")

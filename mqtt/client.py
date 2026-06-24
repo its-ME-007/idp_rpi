@@ -278,8 +278,18 @@ class MQTTClient:
         when main.py already cleans up in its own finally block.
         """
         logger.info("Starting MQTT loop_forever (blocking)")
+        # connect() called loop_start(), which runs the network loop in a
+        # background thread to drive the connect handshake. Running
+        # loop_forever() now would leave TWO loops reading the same TLS socket
+        # concurrently — that corrupts the TLS record layer (ssl.SSLError
+        # RECORD_LAYER_FAILURE → unexpected rc=7 disconnect). Stop the
+        # background loop first, then block here (paho still auto-reconnects).
         try:
-            self._client.loop_forever()
+            self._client.loop_stop()
+        except Exception:
+            pass
+        try:
+            self._client.loop_forever(retry_first_connection=True)
         except KeyboardInterrupt:
             logger.info("MQTT loop interrupted by keyboard")
 
