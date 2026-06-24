@@ -37,6 +37,15 @@ from camera.qr_scanner import QRScanner
 
 def setup_logging(level: str = "INFO") -> None:
     """Configure structured logging for the application."""
+    # Log messages contain non-ASCII chars (—, ✓, →). On a Pi terminal whose
+    # default encoding is latin-1/POSIX, writing them raises UnicodeEncodeError
+    # and can kill worker threads. Force UTF-8 (replace anything unmappable).
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     numeric_level = getattr(logging, level.upper(), logging.INFO)
     logging.basicConfig(
         level=numeric_level,

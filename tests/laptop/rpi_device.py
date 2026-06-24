@@ -373,6 +373,15 @@ def cli_loop():
 def main():
     global client, gate
 
+    # Banners + log messages use non-ASCII chars (═, ┌, —). On a Pi terminal
+    # whose default encoding is latin-1/POSIX these raise UnicodeEncodeError, so
+    # force UTF-8 (replace anything unmappable) before printing/logging anything.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     # Surface GateController's own logging (servo moves, sim warnings)
     logging.basicConfig(
         level=logging.INFO,
