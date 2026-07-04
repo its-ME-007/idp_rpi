@@ -173,23 +173,33 @@ class GateController:
             self._cancel_timer()
 
             if self._simulation:
-                logger.info(
-                    "[SIM] GATE OPEN  (GPIO%d, duty=%.1f%%) — will auto-close in %ds",
-                    self._pin, self._open_duty, self._auto_close,
-                )
+                if self._auto_close and self._auto_close > 0:
+                    logger.info(
+                        "[SIM] GATE OPEN  (GPIO%d, duty=%.1f%%) — will auto-close in %ds",
+                        self._pin, self._open_duty, self._auto_close,
+                    )
+                else:
+                    logger.info(
+                        "[SIM] GATE OPEN  (GPIO%d, duty=%.1f%%) — stays open until closed",
+                        self._pin, self._open_duty,
+                    )
             else:
                 logger.info("GATE OPEN → GPIO%d", self._pin)
                 self._move_to(self._open_duty, label="OPEN")
 
             self._is_open = True
 
-            # Schedule auto-close
-            self._close_timer = threading.Timer(
-                self._auto_close, self._auto_close_callback
-            )
-            self._close_timer.daemon = True
-            self._close_timer.start()
-            logger.debug("Auto-close timer set for %ds", self._auto_close)
+            # Schedule auto-close, unless disabled (auto_close <= 0). A service
+            # gate stays open for the whole session and is closed explicitly.
+            if self._auto_close and self._auto_close > 0:
+                self._close_timer = threading.Timer(
+                    self._auto_close, self._auto_close_callback
+                )
+                self._close_timer.daemon = True
+                self._close_timer.start()
+                logger.debug("Auto-close timer set for %ds", self._auto_close)
+            else:
+                logger.debug("Auto-close disabled — gate will stay open until closed explicitly")
 
     def close(self) -> None:
         """

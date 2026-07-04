@@ -64,6 +64,13 @@ import paho.mqtt.client as mqtt
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from hardware.gate_controller import GateController
 
+# Load broker creds / PLOT_ID from idp_rpi/.env so you don't have to export them
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+except Exception:
+    pass
+
 # ── CONFIG ──────────────────────────────────────────────────────────────────
 BROKER             = os.getenv("MQTT_BROKER",   "your_broker.s1.eu.hivemq.cloud")
 PORT               = int(os.getenv("MQTT_PORT", "8883"))
@@ -79,6 +86,17 @@ SERVO_PWM_FREQ      = int(os.getenv("SERVO_PWM_FREQ", "50"))
 SERVO_OPEN_DUTY     = float(os.getenv("SERVO_OPEN_DUTY", "7.5"))
 SERVO_CLOSE_DUTY    = float(os.getenv("SERVO_CLOSE_DUTY", "2.5"))
 SERVO_OPEN_DURATION = int(os.getenv("SERVO_OPEN_DURATION", "5"))
+
+# Real booking override — set these to a REAL booking (from the backend DB) so the
+# live backend accepts the scan. When QR_BOOKING_ID and QR_TOKEN are set, menu
+# options 1 (entry) and 2 (exit) inject a QR for that booking instead of a random
+# mock one. QR plot_id always uses PLOT_ID above (must match the booking's plot).
+#   export QR_BOOKING_ID=4
+#   export QR_TOKEN=ce7a0c2b2344705a
+#   export QR_VEHICLE=KA02JL8469
+QR_BOOKING_ID = os.getenv("QR_BOOKING_ID")
+QR_TOKEN      = os.getenv("QR_TOKEN")
+QR_VEHICLE    = os.getenv("QR_VEHICLE", "KA01AB1234")
 # ────────────────────────────────────────────────────────────────────────────
 
 def t(suffix): return f"parking/plot/{PLOT_ID}/{suffix}"
@@ -141,8 +159,28 @@ def build_valid_qr(booking: dict) -> str:
         "token":      booking["token"],
         "plot_id":    booking["plot_id"],
         "vehicle":    booking["vehicle"],
-        "issued_at":  booking["issued_at"],
+        "issued_at":  booking.get("issued_at") or now_iso(),
     })
+
+
+def active_booking() -> dict:
+    """
+    The booking used for valid entry/exit scans (menu 1 / 2).
+
+    Uses the real-booking env override (QR_BOOKING_ID + QR_TOKEN) when set, so the
+    live backend validates the scan; otherwise falls back to a random mock booking
+    (only useful with mock_backend.py, which doesn't check tokens against a DB).
+    """
+    if QR_BOOKING_ID and QR_TOKEN:
+        return {
+            "booking_id": int(QR_BOOKING_ID),
+            "token":      QR_TOKEN,
+            "plot_id":    PLOT_ID,
+            "vehicle":    QR_VEHICLE,
+            "issued_at":  now_iso(),
+            "real":       True,
+        }
+    return MOCK_BOOKINGS[_booking_idx % len(MOCK_BOOKINGS)]
 
 def build_scan_payload(qr_raw: str) -> str:
     """Wrap QR string into the entry_scan / exit_scan MQTT payload."""
@@ -236,8 +274,9 @@ def on_message(mqttc, userdata, msg):
         status  = data.get("status", "?")
         vehicle = data.get("vehicle_number", "?")
         b_id    = data.get("booking_id", "?")
-        if status == "verified":
-            log("VERIFY", f"✓ VERIFIED — booking={b_id}  vehicle={vehicle}")
+        if status in ("verified", "checked_out"):
+            label = "CHECKED IN" if status == "verified" else "CHECKED OUT"
+            log("VERIFY", f"✓ {label} — booking={b_id}  vehicle={vehicle}")
         else:
             log("VERIFY", f"✗ REJECTED — booking={b_id}  status={status}")
 
@@ -251,28 +290,24 @@ def on_message(mqttc, userdata, msg):
 # ── CLI actions ───────────────────────────────────────────────────────────────
 
 def inject_entry_scan():
-    global _booking_idx
-    booking = MOCK_BOOKINGS[_booking_idx % len(MOCK_BOOKINGS)]
+    booking = active_booking()
     qr_raw  = build_valid_qr(booking)
     payload = build_scan_payload(qr_raw)
     client.publish(TOPIC_ENTRY_SCAN, payload, qos=1)
-    log("SCAN", f"entry_scan → {TOPIC_ENTRY_SCAN}")
-    log("SCAN", f"  booking_id={booking['booking_id']}  vehicle={booking['vehicle']}  token={booking['token']}")
-    log("SCAN", f"  (booking state: {booking['state']}  → backend will treat as CHECK-IN)")
-    # Simulate state change so next scan on same booking acts as exit
-    booking["state"] = "ACTIVE"
+    kind = "REAL" if booking.get("real") else "MOCK"
+    log("SCAN", f"entry_scan → {TOPIC_ENTRY_SCAN}  [{kind}]")
+    log("SCAN", f"  booking_id={booking['booking_id']}  plot_id={booking['plot_id']}  vehicle={booking['vehicle']}  token={booking['token']}")
+    log("SCAN", "  (backend decides check-in vs check-out from the booking's DB status)")
 
 def inject_exit_scan():
-    global _booking_idx
-    booking = MOCK_BOOKINGS[_booking_idx % len(MOCK_BOOKINGS)]
-    qr_raw  = build_valid_qr(booking)   # same QR, different topic
+    booking = active_booking()
+    qr_raw  = build_valid_qr(booking)   # same QR, exit topic
     payload = build_scan_payload(qr_raw)
     client.publish(TOPIC_EXIT_SCAN, payload, qos=1)
-    log("SCAN", f"exit_scan → {TOPIC_EXIT_SCAN}")
-    log("SCAN", f"  booking_id={booking['booking_id']}  vehicle={booking['vehicle']}")
-    log("SCAN", f"  (booking state: {booking['state']} → backend will treat as CHECK-OUT)")
-    booking["state"] = "COMPLETED"
-    _booking_idx += 1  # next injection uses the next booking
+    kind = "REAL" if booking.get("real") else "MOCK"
+    log("SCAN", f"exit_scan → {TOPIC_EXIT_SCAN}  [{kind}]")
+    log("SCAN", f"  booking_id={booking['booking_id']}  plot_id={booking['plot_id']}  vehicle={booking['vehicle']}  token={booking['token']}")
+    log("SCAN", "  (backend treats as CHECK-OUT only if the booking is currently ACTIVE)")
 
 def inject_wrong_plot():
     qr_raw  = build_wrong_plot_qr()
@@ -395,6 +430,10 @@ def main():
     print(f"  Device ID : {DEVICE_ID}  |  Plot ID: {PLOT_ID}")
     print(f"  Servo     : GPIO{SERVO_PIN} (physical pin 12)  open={SERVO_OPEN_DURATION}s")
     print(f"  Heartbeat : every {HEARTBEAT_INTERVAL}s")
+    if QR_BOOKING_ID and QR_TOKEN:
+        print(f"  QR source : REAL booking_id={QR_BOOKING_ID} token={QR_TOKEN} vehicle={QR_VEHICLE}")
+    else:
+        print(f"  QR source : MOCK (random tokens — only works with mock_backend.py)")
     print("═" * 54)
     print()
 

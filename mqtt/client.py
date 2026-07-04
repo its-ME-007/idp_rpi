@@ -137,6 +137,7 @@ class MQTTClient:
             # Subscribe to all inbound topics for the QR-gate architecture
             inbound_topics = [
                 Topics.gate_command(self.plot_id),
+                Topics.service_gate_command(self.plot_id),
                 Topics.entry_verified(self.plot_id),
                 Topics.alerts(self.plot_id),
             ]

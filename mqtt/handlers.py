@@ -41,15 +41,17 @@ class GateCommandHandler:
         mqtt_client.set_message_handler(handler.handle)
     """
 
-    def __init__(self, gate_controller: GateController):
+    def __init__(self, gate_controller: GateController, service_gate: "GateController | None" = None):
         """
         Initialise the gate command handler.
 
         Args:
-            gate_controller: Configured and set-up GateController instance
+            gate_controller: Configured and set-up GateController for the main gate
+            service_gate:    Optional GateController for the service gate (Phase 10.5)
         """
         self._gate = gate_controller
-        logger.info("GateCommandHandler initialised")
+        self._service_gate = service_gate
+        logger.info("GateCommandHandler initialised (service_gate=%s)", "yes" if service_gate else "no")
 
     def handle(self, topic: str, payload: str) -> None:
         """
@@ -77,6 +79,8 @@ class GateCommandHandler:
 
         if suffix == "gate_command":
             self._handle_gate_command(data)
+        elif suffix == "service_gate_command":
+            self._handle_service_gate_command(data)
         elif suffix == "entry_verified":
             self._handle_entry_verified(data)
         elif suffix == "alerts":
@@ -118,6 +122,36 @@ class GateCommandHandler:
 
         else:
             logger.warning("GATE COMMAND: unknown action '%s' — ignoring", action)
+
+    def _handle_service_gate_command(self, data: dict) -> None:
+        """
+        Process a service_gate_command message (Phase 10.5).
+
+        Payload: { "action": "open" }  (service check-in) or
+                 { "action": "close" } (service check-out)
+
+        Drives the second servo. The service gate stays open for the whole
+        session (auto-close disabled), so "open" holds until an explicit "close".
+        """
+        if self._service_gate is None:
+            logger.warning("SERVICE GATE COMMAND received but no service gate configured — ignoring")
+            return
+
+        action = data.get("action", "").lower()
+        if action == "open":
+            logger.info("SERVICE GATE COMMAND: open — raising service barrier")
+            try:
+                self._service_gate.open()
+            except Exception as exc:
+                logger.error("Error opening service gate: %s", exc, exc_info=True)
+        elif action == "close":
+            logger.info("SERVICE GATE COMMAND: close — lowering service barrier")
+            try:
+                self._service_gate.close()
+            except Exception as exc:
+                logger.error("Error closing service gate: %s", exc, exc_info=True)
+        else:
+            logger.warning("SERVICE GATE COMMAND: unknown action '%s' — ignoring", action)
 
     def _handle_entry_verified(self, data: dict) -> None:
         """
