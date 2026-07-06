@@ -147,16 +147,30 @@ class GateController:
 
         self._cancel_timer()
         if self._pwm:
-            self._pwm.stop()
+            # rpi-lgpio can raise if the underlying gpiochip was already torn
+            # down (e.g. another GateController cleaned up first) — the servo is
+            # stopping anyway, so swallow it.
+            try:
+                self._pwm.stop()
+            except Exception as exc:
+                logger.debug("PWM.stop() during cleanup ignored: %s", exc)
             # Release our reference BEFORE GPIO.cleanup() so the PWM object's
             # destructor runs now (while the gpiochip is still open). Otherwise
             # rpi-lgpio's PWM.__del__ fires at interpreter exit after cleanup()
             # has freed the chip, raising "unsupported operand type(s) for &:
             # 'NoneType' and 'int'" (harmless but noisy).
             self._pwm = None
-        GPIO.cleanup()
+        # Free ONLY this controller's pin — NOT a global GPIO.cleanup(). With two
+        # GateControllers (main gate + service gate) sharing one gpiochip, a global
+        # cleanup by the first controller nulls the chip handle and makes the
+        # second controller's PWM.stop() blow up. Per-pin cleanup leaves the chip
+        # alive for the other gate.
+        try:
+            GPIO.cleanup(self._pin)
+        except Exception as exc:
+            logger.debug("GPIO.cleanup(%s) ignored: %s", self._pin, exc)
         self._is_setup = False
-        logger.info("GPIO cleanup complete")
+        logger.info("GPIO cleanup complete (pin GPIO%d)", self._pin)
 
     # ------------------------------------------------------------------
     # Gate control (public API)
