@@ -54,6 +54,9 @@ class DeviceConfig:
     #   SERVO_CLOSE_DUTY — duty % when gate is closed (default 2.5% ≈ 0°)
     #   SERVO_OPEN_DURATION — seconds to keep gate open before auto-closing
 
+    BUZZER_PIN: int          = int(os.getenv("BUZZER_PIN", "24"))
+    BUZZER_DURATION: float   = float(os.getenv("BUZZER_DURATION", "3.0"))
+
     SERVO_PIN: int           = int(os.getenv("SERVO_PIN", "18"))
     SERVO_PWM_FREQ: int      = int(os.getenv("SERVO_PWM_FREQ", "50"))
     SERVO_OPEN_DUTY: float   = float(os.getenv("SERVO_OPEN_DUTY", "7.5"))
