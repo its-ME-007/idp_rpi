@@ -163,8 +163,8 @@ class QRScanner:
         camera_index: int = 0,        # kept for API compatibility; picamera2 ignores this
         scan_interval: float = 0.5,
         cooldown_seconds: int = 10,
-        camera_width: int = 640,
-        camera_height: int = 480,
+        camera_width: int = 1240,
+        camera_height: int = 720,
     ):
         """
         Initialise the QR scanner.
@@ -266,7 +266,13 @@ class QRScanner:
 
                 # Convert RGB → BGR for OpenCV
                 frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-
+                '''
+		# debug qr scanning function 
+                preview = frame_bgr.copy()
+                cv2.putText(preview,"q to quit niggesh",(0,0),cv2.FONT_COMPLEX,0.8,(85,85,85),)
+                cv2.imshow("cam preview", preview)
+                cv2.waitKey(1)		
+                '''
                 # Attempt QR decode
                 raw_text, points, _ = detector.detectAndDecode(frame_bgr)
 

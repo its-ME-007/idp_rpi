@@ -60,6 +60,11 @@ class DeviceConfig:
     SERVO_CLOSE_DUTY: float  = float(os.getenv("SERVO_CLOSE_DUTY", "2.5"))
     SERVO_OPEN_DURATION: int = int(os.getenv("SERVO_OPEN_DURATION", "5"))
 
+    # --- Service gate (Phase 10.5): a 2nd servo for EV/storage service access ---
+    # Stays OPEN for the whole service session: opens on service check-in,
+    # closes on service check-out. auto_close is disabled (0) for this gate.
+    SERVO_SERVICE_PIN: int   = int(os.getenv("SERVO_SERVICE_PIN", "13"))
+
     # =========================================================================
     # Camera / QR Configuration
     # =========================================================================
@@ -114,6 +119,7 @@ class DeviceConfig:
         print(f"  Heartbeat:        every {cls.HEARTBEAT_INTERVAL}s")
         print(f"  Servo pin:        GPIO{cls.SERVO_PIN}  (open={cls.SERVO_OPEN_DUTY}%, close={cls.SERVO_CLOSE_DUTY}%)")
         print(f"  Gate open for:    {cls.SERVO_OPEN_DURATION}s then auto-closes")
+        print(f"  Service servo:    GPIO{cls.SERVO_SERVICE_PIN}  (stays open for the service session)")
         print(f"  Camera index:     {cls.CAMERA_INDEX}  ({cls.CAMERA_WIDTH}x{cls.CAMERA_HEIGHT})")
         print(f"  QR scan interval: {cls.QR_SCAN_INTERVAL}s  |  cooldown: {cls.QR_COOLDOWN}s")
         print(f"  Log Level:        {cls.LOG_LEVEL}")

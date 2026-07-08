@@ -147,16 +147,30 @@ class GateController:
 
         self._cancel_timer()
         if self._pwm:
-            self._pwm.stop()
+            # rpi-lgpio can raise if the underlying gpiochip was already torn
+            # down (e.g. another GateController cleaned up first) — the servo is
+            # stopping anyway, so swallow it.
+            try:
+                self._pwm.stop()
+            except Exception as exc:
+                logger.debug("PWM.stop() during cleanup ignored: %s", exc)
             # Release our reference BEFORE GPIO.cleanup() so the PWM object's
             # destructor runs now (while the gpiochip is still open). Otherwise
             # rpi-lgpio's PWM.__del__ fires at interpreter exit after cleanup()
             # has freed the chip, raising "unsupported operand type(s) for &:
             # 'NoneType' and 'int'" (harmless but noisy).
             self._pwm = None
-        GPIO.cleanup()
+        # Free ONLY this controller's pin — NOT a global GPIO.cleanup(). With two
+        # GateControllers (main gate + service gate) sharing one gpiochip, a global
+        # cleanup by the first controller nulls the chip handle and makes the
+        # second controller's PWM.stop() blow up. Per-pin cleanup leaves the chip
+        # alive for the other gate.
+        try:
+            GPIO.cleanup(self._pin)
+        except Exception as exc:
+            logger.debug("GPIO.cleanup(%s) ignored: %s", self._pin, exc)
         self._is_setup = False
-        logger.info("GPIO cleanup complete")
+        logger.info("GPIO cleanup complete (pin GPIO%d)", self._pin)
 
     # ------------------------------------------------------------------
     # Gate control (public API)
@@ -173,23 +187,33 @@ class GateController:
             self._cancel_timer()
 
             if self._simulation:
-                logger.info(
-                    "[SIM] GATE OPEN  (GPIO%d, duty=%.1f%%) — will auto-close in %ds",
-                    self._pin, self._open_duty, self._auto_close,
-                )
+                if self._auto_close and self._auto_close > 0:
+                    logger.info(
+                        "[SIM] GATE OPEN  (GPIO%d, duty=%.1f%%) — will auto-close in %ds",
+                        self._pin, self._open_duty, self._auto_close,
+                    )
+                else:
+                    logger.info(
+                        "[SIM] GATE OPEN  (GPIO%d, duty=%.1f%%) — stays open until closed",
+                        self._pin, self._open_duty,
+                    )
             else:
                 logger.info("GATE OPEN → GPIO%d", self._pin)
                 self._move_to(self._open_duty, label="OPEN")
 
             self._is_open = True
 
-            # Schedule auto-close
-            self._close_timer = threading.Timer(
-                self._auto_close, self._auto_close_callback
-            )
-            self._close_timer.daemon = True
-            self._close_timer.start()
-            logger.debug("Auto-close timer set for %ds", self._auto_close)
+            # Schedule auto-close, unless disabled (auto_close <= 0). A service
+            # gate stays open for the whole session and is closed explicitly.
+            if self._auto_close and self._auto_close > 0:
+                self._close_timer = threading.Timer(
+                    self._auto_close, self._auto_close_callback
+                )
+                self._close_timer.daemon = True
+                self._close_timer.start()
+                logger.debug("Auto-close timer set for %ds", self._auto_close)
+            else:
+                logger.debug("Auto-close disabled — gate will stay open until closed explicitly")
 
     def close(self) -> None:
         """

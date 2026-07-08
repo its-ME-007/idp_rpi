@@ -97,6 +97,20 @@ def main() -> None:
     else:
         logger.info("Gate controller ready on GPIO%d", DeviceConfig.SERVO_PIN)
 
+    # --- Initialise Service Gate Controller (2nd servo, Phase 10.5) ---
+    # Opens on service check-in, stays open, closes on service check-out
+    # (auto_close_seconds=0 disables the parking gate's timed auto-close).
+    logger.info("Initialising service gate controller...")
+    service_gate = GateController(
+        servo_pin=DeviceConfig.SERVO_SERVICE_PIN,
+        pwm_frequency=DeviceConfig.SERVO_PWM_FREQ,
+        open_duty=DeviceConfig.SERVO_OPEN_DUTY,
+        close_duty=DeviceConfig.SERVO_CLOSE_DUTY,
+        auto_close_seconds=0,
+    )
+    service_gate.setup()
+    logger.info("Service gate controller ready on GPIO%d", DeviceConfig.SERVO_SERVICE_PIN)
+
     # --- Initialise MQTT Client ---
     mqtt_client = MQTTClient(
         broker=DeviceConfig.MQTT_BROKER,
@@ -112,7 +126,7 @@ def main() -> None:
 
     # --- Initialise Gate Command Handler ---
     # Receives gate_command / entry_verified / alerts from backend
-    gate_handler = GateCommandHandler(gate_controller=gate)
+    gate_handler = GateCommandHandler(gate_controller=gate, service_gate=service_gate)
     mqtt_client.set_message_handler(gate_handler.handle)
 
     # --- Initialise Heartbeat Service ---
@@ -143,6 +157,7 @@ def main() -> None:
         heartbeat.stop()
         mqtt_client.disconnect()
         gate.cleanup()
+        service_gate.cleanup()
         logger.info("Shutdown complete.")
         sys.exit(0)
 
@@ -156,6 +171,7 @@ def main() -> None:
     if not connected:
         logger.error("Failed to connect to MQTT broker. Exiting.")
         gate.cleanup()
+        service_gate.cleanup()
         sys.exit(1)
 
     # --- Start Background Services ---
@@ -184,6 +200,7 @@ def main() -> None:
         heartbeat.stop()
         mqtt_client.disconnect()
         gate.cleanup()
+        service_gate.cleanup()
         logger.info("NammaPark RPi device stopped.")
 
 

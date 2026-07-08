@@ -29,6 +29,7 @@ class Topics:
     # Suffixes
     ENTRY_SCAN     = "entry_scan"
     GATE_COMMAND   = "gate_command"
+    SERVICE_GATE_COMMAND = "service_gate_command"
     HEARTBEAT      = "heartbeat"
     ENTRY_VERIFIED = "entry_verified"
     ALERTS         = "alerts"
@@ -68,6 +69,16 @@ class Topics:
         Payload: { "action": "open" } or { "action": "close" }
         """
         return f"{Topics.PREFIX}/{plot_id}/{Topics.GATE_COMMAND}"
+
+    @staticmethod
+    def service_gate_command(plot_id: int) -> str:
+        """
+        Backend publishes here to control the service gate servo (Phase 10.5).
+
+        Payload: { "action": "open" } (service check-in) or { "action": "close" } (check-out).
+        Unlike the main gate, the service gate stays open for the whole session.
+        """
+        return f"{Topics.PREFIX}/{plot_id}/{Topics.SERVICE_GATE_COMMAND}"
 
     @staticmethod
     def entry_verified(plot_id: int) -> str:
