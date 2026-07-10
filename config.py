@@ -56,6 +56,7 @@ class DeviceConfig:
 
     BUZZER_PIN: int          = int(os.getenv("BUZZER_PIN", "24"))
     BUZZER_DURATION: float   = float(os.getenv("BUZZER_DURATION", "3.0"))
+    LED_PIN: int             = int(os.getenv("LED_PIN", "23"))
 
     SERVO_PIN: int           = int(os.getenv("SERVO_PIN", "18"))
     SERVO_PWM_FREQ: int      = int(os.getenv("SERVO_PWM_FREQ", "50"))

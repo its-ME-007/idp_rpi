@@ -19,9 +19,11 @@ Topics:
 
 import json
 import logging
+import threading
 from typing import Callable
 
 from hardware.gate_controller import GateController
+from hardware.led import LEDIndicator
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +43,20 @@ class GateCommandHandler:
         mqtt_client.set_message_handler(handler.handle)
     """
 
-    def __init__(self, gate_controller: GateController, service_gate: "GateController | None" = None):
+    def __init__(self, gate_controller: GateController, service_gate: "GateController | None" = None, led: "LEDIndicator | None" = None):
         """
         Initialise the gate command handler.
 
         Args:
             gate_controller: Configured and set-up GateController for the main gate
             service_gate:    Optional GateController for the service gate (Phase 10.5)
+            led:             Optional LEDIndicator — on when gate is open
         """
         self._gate = gate_controller
         self._service_gate = service_gate
-        logger.info("GateCommandHandler initialised (service_gate=%s)", "yes" if service_gate else "no")
+        self._led = led
+        self._led_timer: threading.Timer | None = None
+        logger.info("GateCommandHandler initialised (service_gate=%s, led=%s)", "yes" if service_gate else "no", "yes" if led else "no")
 
     def handle(self, topic: str, payload: str) -> None:
         """
@@ -110,6 +115,17 @@ class GateCommandHandler:
             logger.info("GATE COMMAND: open — raising barrier")
             try:
                 self._gate.open()
+                if self._led:
+                    # Cancel any previous auto-off timer
+                    if self._led_timer and self._led_timer.is_alive():
+                        self._led_timer.cancel()
+                    self._led.on()
+                    # Mirror the gate's auto-close: turn LED off after the same delay
+                    auto_close = self._gate._auto_close
+                    if auto_close and auto_close > 0:
+                        self._led_timer = threading.Timer(auto_close, self._led.off)
+                        self._led_timer.daemon = True
+                        self._led_timer.start()
             except Exception as exc:
                 logger.error("Error opening gate: %s", exc, exc_info=True)
 
@@ -117,6 +133,10 @@ class GateCommandHandler:
             logger.info("GATE COMMAND: close — lowering barrier")
             try:
                 self._gate.close()
+                if self._led:
+                    if self._led_timer and self._led_timer.is_alive():
+                        self._led_timer.cancel()
+                    self._led.off()
             except Exception as exc:
                 logger.error("Error closing gate: %s", exc, exc_info=True)
 

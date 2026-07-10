@@ -32,6 +32,7 @@ from mqtt.client import MQTTClient
 from mqtt.handlers import GateCommandHandler
 from mqtt.heartbeat import HeartbeatService
 from hardware.gate_controller import GateController
+from hardware.led import LEDIndicator
 from camera.qr_scanner import QRScanner
 
 
@@ -124,9 +125,15 @@ def main() -> None:
         reconnect_max_delay=DeviceConfig.RECONNECT_MAX_DELAY,
     )
 
+    # --- Initialise LED Indicator ---
+    logger.info("Initialising LED indicator...")
+    led = LEDIndicator(pin=DeviceConfig.LED_PIN)
+    led.setup()
+    logger.info("LED indicator ready on GPIO%d", DeviceConfig.LED_PIN)
+
     # --- Initialise Gate Command Handler ---
     # Receives gate_command / entry_verified / alerts from backend
-    gate_handler = GateCommandHandler(gate_controller=gate, service_gate=service_gate)
+    gate_handler = GateCommandHandler(gate_controller=gate, service_gate=service_gate, led=led)
     mqtt_client.set_message_handler(gate_handler.handle)
 
     # --- Initialise Heartbeat Service ---
@@ -158,6 +165,7 @@ def main() -> None:
         mqtt_client.disconnect()
         gate.cleanup()
         service_gate.cleanup()
+        led.cleanup()
         logger.info("Shutdown complete.")
         sys.exit(0)
 
@@ -201,6 +209,7 @@ def main() -> None:
         mqtt_client.disconnect()
         gate.cleanup()
         service_gate.cleanup()
+        led.cleanup()
         logger.info("NammaPark RPi device stopped.")
 
 
