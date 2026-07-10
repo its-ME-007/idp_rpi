@@ -19,11 +19,9 @@ Topics:
 
 import json
 import logging
-import threading
 from typing import Callable
 
 from hardware.gate_controller import GateController
-from hardware.buzzer import BuzzerController
 
 logger = logging.getLogger(__name__)
 
@@ -43,28 +41,17 @@ class GateCommandHandler:
         mqtt_client.set_message_handler(handler.handle)
     """
 
-    def __init__(
-        self,
-        gate_controller: GateController,
-        service_gate: "GateController | None" = None,
-        buzzer: "BuzzerController | None" = None,
-    ):
+    def __init__(self, gate_controller: GateController, service_gate: "GateController | None" = None):
         """
         Initialise the gate command handler.
 
         Args:
             gate_controller: Configured and set-up GateController for the main gate
             service_gate:    Optional GateController for the service gate (Phase 10.5)
-            buzzer:          Optional BuzzerController — sounds before gate opens
         """
         self._gate = gate_controller
         self._service_gate = service_gate
-        self._buzzer = buzzer
-        logger.info(
-            "GateCommandHandler initialised (service_gate=%s, buzzer=%s)",
-            "yes" if service_gate else "no",
-            "yes" if buzzer else "no",
-        )
+        logger.info("GateCommandHandler initialised (service_gate=%s)", "yes" if service_gate else "no")
 
     def handle(self, topic: str, payload: str) -> None:
         """
@@ -120,8 +107,11 @@ class GateCommandHandler:
         action = data.get("action", "").lower()
 
         if action == "open":
-            logger.info("GATE COMMAND: open — buzzer then raising barrier")
-            threading.Thread(target=self._buzz_then_open, daemon=True).start()
+            logger.info("GATE COMMAND: open — raising barrier")
+            try:
+                self._gate.open()
+            except Exception as exc:
+                logger.error("Error opening gate: %s", exc, exc_info=True)
 
         elif action == "close":
             logger.info("GATE COMMAND: close — lowering barrier")
@@ -132,15 +122,6 @@ class GateCommandHandler:
 
         else:
             logger.warning("GATE COMMAND: unknown action '%s' — ignoring", action)
-
-    def _buzz_then_open(self) -> None:
-        """Sound buzzer for configured duration, then open the gate."""
-        if self._buzzer:
-            self._buzzer.buzz()
-        try:
-            self._gate.open()
-        except Exception as exc:
-            logger.error("Error opening gate: %s", exc, exc_info=True)
 
     def _handle_service_gate_command(self, data: dict) -> None:
         """

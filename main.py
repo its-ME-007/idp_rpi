@@ -32,7 +32,6 @@ from mqtt.client import MQTTClient
 from mqtt.handlers import GateCommandHandler
 from mqtt.heartbeat import HeartbeatService
 from hardware.gate_controller import GateController
-from hardware.buzzer import BuzzerController
 from camera.qr_scanner import QRScanner
 
 
@@ -125,16 +124,9 @@ def main() -> None:
         reconnect_max_delay=DeviceConfig.RECONNECT_MAX_DELAY,
     )
 
-    # --- Initialise Buzzer ---
-    buzzer = BuzzerController(
-        pin=DeviceConfig.BUZZER_PIN,
-        buzz_seconds=DeviceConfig.BUZZER_DURATION,
-    )
-    buzzer.setup()
-
     # --- Initialise Gate Command Handler ---
     # Receives gate_command / entry_verified / alerts from backend
-    gate_handler = GateCommandHandler(gate_controller=gate, service_gate=service_gate, buzzer=buzzer)
+    gate_handler = GateCommandHandler(gate_controller=gate, service_gate=service_gate)
     mqtt_client.set_message_handler(gate_handler.handle)
 
     # --- Initialise Heartbeat Service ---
@@ -166,7 +158,6 @@ def main() -> None:
         mqtt_client.disconnect()
         gate.cleanup()
         service_gate.cleanup()
-        buzzer.cleanup()
         logger.info("Shutdown complete.")
         sys.exit(0)
 
